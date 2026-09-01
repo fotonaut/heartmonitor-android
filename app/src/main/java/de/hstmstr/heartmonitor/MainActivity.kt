@@ -17,7 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.collectAsState
 import de.hstmstr.heartmonitor.ui.HeartRateScreen
 import de.hstmstr.heartmonitor.ui.HeartRateViewModel
 import de.hstmstr.heartmonitor.ui.RecordingsScreen
@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             HeartMonitorTheme {
-                val state by viewModel.uiState.collectAsStateWithLifecycle()
+                val state by viewModel.uiState.collectAsState()
                 var screen by remember { mutableStateOf(Screen.MAIN) }
                 var recordings by remember { mutableStateOf(emptyList<File>()) }
 
