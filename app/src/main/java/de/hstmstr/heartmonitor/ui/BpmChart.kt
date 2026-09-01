@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.hstmstr.heartmonitor.data.BpmTrackPoint
+import de.hstmstr.heartmonitor.data.movingAverageBpm
 import de.hstmstr.heartmonitor.recording.HeartRateZone
 import de.hstmstr.heartmonitor.ui.theme.HeartMonitorTheme
 import kotlin.math.abs
@@ -54,12 +55,19 @@ import kotlin.math.floor
  * - the line breaks at [BpmTrackPoint.gapBefore] (a recording gap) instead of
  *   drawing a long diagonal,
  * - tapping or dragging across the chart pins a marker with the bpm and time of
- *   the nearest sample.
+ *   the nearest sample,
+ * - an optional centered moving average ([smoothingWindow] >= 3) draws a
+ *   smoothed line over a faint copy of the raw trace.
+ *
+ * @param smoothingWindow  sample count of the moving average, or 0/1/2 for off.
+ *                         The average never crosses a recording gap and the
+ *                         marker / tooltip always report the raw sample.
  */
 @Composable
 fun BpmChart(
     points: List<BpmTrackPoint>,
     modifier: Modifier = Modifier,
+    smoothingWindow: Int = 0,
 ) {
     if (points.size < 2) {
         Box(modifier, contentAlignment = Alignment.Center) {
@@ -99,6 +107,11 @@ fun BpmChart(
     }
 
     var selected by remember(points) { mutableStateOf<Int?>(null) }
+
+    // Smoothed y-values aligned with points, or null when smoothing is off.
+    val smoothed: List<Double>? = remember(points, smoothingWindow) {
+        if (smoothingWindow >= 3) points.movingAverageBpm(smoothingWindow) else null
+    }
 
     Canvas(
         modifier
@@ -173,24 +186,38 @@ fun BpmChart(
         }
 
         // The bpm line, split into segments wherever a recording gap sits, each
-        // with a soft fill down to the baseline.
+        // with a soft fill down to the baseline. When smoothing is on, the
+        // plotted y is the moving average and the raw trace stays visible faintly
+        // underneath.
         val strokePx = with(density) { 2.dp.toPx() }
-        forEachSegment(points) { segment ->
-            if (segment.size == 1) {
-                val p = segment.first()
-                drawCircle(lineColor, strokePx, Offset(geo.xPx(p.elapsedSeconds), geo.yPx(p.bpm.toDouble())))
+        val rawStrokePx = with(density) { 1.dp.toPx() }
+        fun plotYPx(i: Int): Float = geo.yPx(smoothed?.get(i) ?: points[i].bpm.toDouble())
+        fun rawYPx(i: Int): Float = geo.yPx(points[i].bpm.toDouble())
+        forEachSegment(points) { range ->
+            if (range.first == range.last) {
+                val i = range.first
+                drawCircle(lineColor, strokePx, Offset(geo.xPx(points[i].elapsedSeconds), plotYPx(i)))
                 return@forEachSegment
             }
+            if (smoothed != null) {
+                val raw = Path().apply {
+                    moveTo(geo.xPx(points[range.first].elapsedSeconds), rawYPx(range.first))
+                    for (i in range.first + 1..range.last) {
+                        lineTo(geo.xPx(points[i].elapsedSeconds), rawYPx(i))
+                    }
+                }
+                drawPath(raw, color = lineColor.copy(alpha = 0.25f), style = Stroke(width = rawStrokePx))
+            }
             val line = Path().apply {
-                moveTo(geo.xPx(segment.first().elapsedSeconds), geo.yPx(segment.first().bpm.toDouble()))
-                for (i in 1 until segment.size) {
-                    lineTo(geo.xPx(segment[i].elapsedSeconds), geo.yPx(segment[i].bpm.toDouble()))
+                moveTo(geo.xPx(points[range.first].elapsedSeconds), plotYPx(range.first))
+                for (i in range.first + 1..range.last) {
+                    lineTo(geo.xPx(points[i].elapsedSeconds), plotYPx(i))
                 }
             }
             val area = Path().apply {
                 addPath(line)
-                lineTo(geo.xPx(segment.last().elapsedSeconds), geo.plotBottom)
-                lineTo(geo.xPx(segment.first().elapsedSeconds), geo.plotBottom)
+                lineTo(geo.xPx(points[range.last].elapsedSeconds), geo.plotBottom)
+                lineTo(geo.xPx(points[range.first].elapsedSeconds), geo.plotBottom)
                 close()
             }
             drawPath(area, fillColor)
@@ -334,15 +361,15 @@ private fun nearestIndex(
     return best
 }
 
-/** Splits [points] into contiguous runs, breaking before every gap. */
+/** Index ranges of the contiguous runs in [points], breaking before every gap. */
 private inline fun forEachSegment(
     points: List<BpmTrackPoint>,
-    action: (List<BpmTrackPoint>) -> Unit,
+    action: (IntRange) -> Unit,
 ) {
     var start = 0
     for (i in 1..points.size) {
         if (i == points.size || points[i].gapBefore) {
-            action(points.subList(start, i))
+            action(start until i)
             start = i
         }
     }
@@ -382,6 +409,34 @@ private fun BpmChartPreview() {
     HeartMonitorTheme {
         BpmChart(
             points = demo,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(220.dp)
+                .padding(4.dp),
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun BpmChartSmoothedPreview() {
+    val demo = buildList {
+        var bpm = 78.0
+        repeat(120) { i ->
+            bpm += (if (i % 7 < 4) 3 else -4) + (i % 3 - 1)
+            add(
+                BpmTrackPoint(
+                    elapsedSeconds = i * 3.0 + if (i >= 70) 40 else 0,
+                    bpm = bpm.coerceIn(60.0, 180.0).toInt(),
+                    gapBefore = i == 70,
+                ),
+            )
+        }
+    }
+    HeartMonitorTheme {
+        BpmChart(
+            points = demo,
+            smoothingWindow = 9,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(220.dp)
