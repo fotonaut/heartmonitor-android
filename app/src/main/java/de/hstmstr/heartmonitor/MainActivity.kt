@@ -18,13 +18,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import de.hstmstr.heartmonitor.ui.DeviceListScreen
 import de.hstmstr.heartmonitor.ui.HeartRateScreen
 import de.hstmstr.heartmonitor.ui.HeartRateViewModel
 import de.hstmstr.heartmonitor.ui.RecordingsScreen
 import de.hstmstr.heartmonitor.ui.theme.HeartMonitorTheme
 import java.io.File
 
-private enum class Screen { MAIN, RECORDINGS }
+private enum class Screen { MAIN, RECORDINGS, DEVICES }
 
 class MainActivity : ComponentActivity() {
 
@@ -35,6 +36,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             HeartMonitorTheme {
                 val state by viewModel.uiState.collectAsState()
+                val devices by viewModel.discoveredDevices.collectAsState()
+                val remembered by viewModel.rememberedDevice.collectAsState()
                 var screen by remember { mutableStateOf(Screen.MAIN) }
                 var recordings by remember { mutableStateOf(emptyList<File>()) }
 
@@ -48,6 +51,11 @@ class MainActivity : ComponentActivity() {
                     onDispose {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
+                }
+
+                // Leave the picker automatically once a connection is up.
+                LaunchedEffect(state.isConnected) {
+                    if (state.isConnected && screen == Screen.DEVICES) screen = Screen.MAIN
                 }
 
                 val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -64,6 +72,26 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.RequestMultiplePermissions(),
                 ) { result ->
                     viewModel.onPermissionsResult(result.values.all { it })
+                }
+
+                val devicePickerPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestMultiplePermissions(),
+                ) { result ->
+                    if (result.values.all { it }) {
+                        viewModel.startDeviceScan()
+                        screen = Screen.DEVICES
+                    } else {
+                        viewModel.onPermissionsDenied()
+                    }
+                }
+
+                val openDevicePicker = {
+                    if (viewModel.hasAllPermissions()) {
+                        viewModel.startDeviceScan()
+                        screen = Screen.DEVICES
+                    } else {
+                        devicePickerPermissionLauncher.launch(viewModel.requiredPermissions())
+                    }
                 }
 
                 when (screen) {
@@ -86,6 +114,7 @@ class MainActivity : ComponentActivity() {
                                 recordings = viewModel.listRecordings()
                                 screen = Screen.RECORDINGS
                             },
+                            onChooseDevice = openDevicePicker,
                         )
                     }
 
@@ -101,6 +130,18 @@ class MainActivity : ComponentActivity() {
                                 viewModel.deleteRecording(file)
                                 recordings = viewModel.listRecordings()
                             },
+                            onBack = { screen = Screen.MAIN },
+                        )
+                    }
+
+                    Screen.DEVICES -> Surface {
+                        DeviceListScreen(
+                            devices = devices,
+                            scanning = state.isBusy,
+                            rememberedAddress = remembered?.address,
+                            onPick = viewModel::onDevicePicked,
+                            onRescan = viewModel::startDeviceScan,
+                            onForget = viewModel::forgetRememberedDevice,
                             onBack = { screen = Screen.MAIN },
                         )
                     }

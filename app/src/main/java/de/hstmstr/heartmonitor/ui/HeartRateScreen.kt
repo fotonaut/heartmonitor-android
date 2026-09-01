@@ -32,6 +32,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -69,6 +70,7 @@ fun HeartRateScreen(
     onMessageShown: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenRecordings: () -> Unit = {},
+    onChooseDevice: () -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -117,6 +119,7 @@ fun HeartRateScreen(
                 state = state,
                 onConnectClick = onConnectClick,
                 onRecordClick = onRecordClick,
+                onChooseDevice = onChooseDevice,
             )
         }
     }
@@ -239,6 +242,7 @@ private fun ActionButtons(
     state: HeartRateUiState,
     onConnectClick: () -> Unit,
     onRecordClick: () -> Unit,
+    onChooseDevice: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -259,6 +263,18 @@ private fun ActionButtons(
                 Spacer(Modifier.width(12.dp))
             }
             Text(state.connectButtonLabel)
+        }
+
+        if (!state.isConnected && !state.isRecording) {
+            TextButton(
+                onClick = onChooseDevice,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    if (state.rememberedDeviceName != null) "Anderes Gerät wählen"
+                    else "Gerät aus Liste wählen",
+                )
+            }
         }
 
         OutlinedButton(
