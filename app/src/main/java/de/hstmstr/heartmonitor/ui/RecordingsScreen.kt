@@ -1,5 +1,6 @@
 package de.hstmstr.heartmonitor.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,12 +26,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import de.hstmstr.heartmonitor.data.HeartRateCsvSummary
 import de.hstmstr.heartmonitor.ui.theme.HeartMonitorTheme
 import java.io.File
 import java.text.DateFormat
@@ -45,6 +48,8 @@ fun RecordingsScreen(
     onDelete: (File) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpen: (File) -> Unit = {},
+    onSummarize: suspend (File) -> HeartRateCsvSummary? = { null },
 ) {
     var pendingDelete by remember { mutableStateOf<File?>(null) }
 
@@ -85,6 +90,8 @@ fun RecordingsScreen(
                 items(recordings, key = { it.absolutePath }) { file ->
                     RecordingRow(
                         file = file,
+                        onSummarize = onSummarize,
+                        onOpen = { onOpen(file) },
                         onShare = { onShare(file) },
                         onDelete = { pendingDelete = file },
                     )
@@ -114,10 +121,20 @@ fun RecordingsScreen(
 @Composable
 private fun RecordingRow(
     file: File,
+    onSummarize: suspend (File) -> HeartRateCsvSummary?,
+    onOpen: () -> Unit,
     onShare: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    val summary by produceState<HeartRateCsvSummary?>(initialValue = null, file) {
+        value = onSummarize(file)
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+    ) {
         androidx.compose.foundation.layout.Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -136,6 +153,7 @@ private fun RecordingRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                summary?.let { RecordingStatsLine(it) }
             }
             IconButton(onClick = onShare) {
                 Icon(Icons.Filled.Share, contentDescription = "Teilen")
@@ -149,6 +167,17 @@ private fun RecordingRow(
             }
         }
     }
+}
+
+@Composable
+private fun RecordingStatsLine(summary: HeartRateCsvSummary) {
+    val stats = summary.stats ?: return
+    val duration = summary.durationSeconds?.let { formatElapsed(it) }
+    Text(
+        text = listOfNotNull(duration, stats.format()).joinToString(" · "),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 private fun formatSize(bytes: Long): String = when {

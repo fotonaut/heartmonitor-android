@@ -13,6 +13,12 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.ZoneId
 
+/** Everything the recording-detail screen needs from one stored CSV. */
+data class RecordingDetail(
+    val summary: HeartRateCsvSummary,
+    val series: List<BpmTrackPoint>,
+)
+
 /** Where a recording ended up on disk. */
 data class CsvSaveResult(
     val fileName: String,
@@ -75,6 +81,29 @@ class CsvStorageManager(private val context: Context) {
             publicLocation = publicLocation,
             sampleCount = samples.size,
         )
+    }
+
+    /**
+     * Re-parses a stored recording into a min/max/average + duration summary.
+     * Runs on [Dispatchers.IO]; returns null if the file cannot be read.
+     */
+    suspend fun summarize(file: File): HeartRateCsvSummary? = withContext(Dispatchers.IO) {
+        runCatching { HeartRateCsvSummary.parse(file.readText(Charsets.UTF_8)) }.getOrNull()
+    }
+
+    /**
+     * Reads a stored recording once and returns both its summary and the
+     * bpm-over-time series for the detail chart. [Dispatchers.IO]; null on a
+     * read failure.
+     */
+    suspend fun readDetail(file: File): RecordingDetail? = withContext(Dispatchers.IO) {
+        runCatching {
+            val text = file.readText(Charsets.UTF_8)
+            RecordingDetail(
+                summary = HeartRateCsvSummary.parse(text),
+                series = HeartRateCsvSummary.parseSeries(text),
+            )
+        }.getOrNull()
     }
 
     /** CSV files previously written to app storage, newest first. */

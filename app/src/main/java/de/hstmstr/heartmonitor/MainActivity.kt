@@ -21,11 +21,12 @@ import androidx.compose.runtime.collectAsState
 import de.hstmstr.heartmonitor.ui.DeviceListScreen
 import de.hstmstr.heartmonitor.ui.HeartRateScreen
 import de.hstmstr.heartmonitor.ui.HeartRateViewModel
+import de.hstmstr.heartmonitor.ui.RecordingDetailScreen
 import de.hstmstr.heartmonitor.ui.RecordingsScreen
 import de.hstmstr.heartmonitor.ui.theme.HeartMonitorTheme
 import java.io.File
 
-private enum class Screen { MAIN, RECORDINGS, DEVICES }
+private enum class Screen { MAIN, RECORDINGS, RECORDING_DETAIL, DEVICES }
 
 class MainActivity : ComponentActivity() {
 
@@ -40,6 +41,7 @@ class MainActivity : ComponentActivity() {
                 val remembered by viewModel.rememberedDevice.collectAsState()
                 var screen by remember { mutableStateOf(Screen.MAIN) }
                 var recordings by remember { mutableStateOf(emptyList<File>()) }
+                var selectedRecording by remember { mutableStateOf<File?>(null) }
 
                 // Keep the screen awake while a recording is running.
                 DisposableEffect(state.isRecording) {
@@ -130,8 +132,34 @@ class MainActivity : ComponentActivity() {
                                 viewModel.deleteRecording(file)
                                 recordings = viewModel.listRecordings()
                             },
+                            onOpen = { file ->
+                                selectedRecording = file
+                                screen = Screen.RECORDING_DETAIL
+                            },
+                            onSummarize = viewModel::summarize,
                             onBack = { screen = Screen.MAIN },
                         )
+                    }
+
+                    Screen.RECORDING_DETAIL -> Surface {
+                        val file = selectedRecording
+                        if (file == null) {
+                            LaunchedEffect(Unit) { screen = Screen.RECORDINGS }
+                        } else {
+                            RecordingDetailScreen(
+                                file = file,
+                                onLoad = viewModel::recordingDetail,
+                                onShare = {
+                                    startActivity(
+                                        Intent.createChooser(
+                                            viewModel.shareIntentFor(file),
+                                            "CSV teilen",
+                                        ),
+                                    )
+                                },
+                                onBack = { screen = Screen.RECORDINGS },
+                            )
+                        }
                     }
 
                     Screen.DEVICES -> Surface {
