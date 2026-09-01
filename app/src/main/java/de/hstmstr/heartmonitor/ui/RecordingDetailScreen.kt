@@ -7,13 +7,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -22,7 +26,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,11 +101,15 @@ fun RecordingDetailScreen(
     }
 }
 
+/** Sample count of the moving average offered by the "Kurve glätten" chip. */
+private const val SMOOTHING_WINDOW = 9
+
 @Composable
 private fun RecordingDetailContent(detail: RecordingDetail, modifier: Modifier = Modifier) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val stats = detail.summary.stats
         val duration = detail.summary.durationSeconds
+        var smooth by rememberSaveable { mutableStateOf(false) }
 
         Text(
             text = buildString {
@@ -118,12 +129,29 @@ private fun RecordingDetailContent(detail: RecordingDetail, modifier: Modifier =
 
         BpmChart(
             points = detail.series,
+            smoothingWindow = if (smooth) SMOOTHING_WINDOW else 0,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(240.dp),
         )
 
         if (detail.series.size >= 2) {
+            FilterChip(
+                selected = smooth,
+                onClick = { smooth = !smooth },
+                label = { Text("Kurve glätten") },
+                leadingIcon = if (smooth) {
+                    {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(FilterChipDefaults.IconSize),
+                        )
+                    }
+                } else {
+                    null
+                },
+            )
             Text(
                 text = "Tippen oder ziehen für Einzelwerte",
                 style = MaterialTheme.typography.labelSmall,
