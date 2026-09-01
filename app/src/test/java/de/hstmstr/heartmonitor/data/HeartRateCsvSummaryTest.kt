@@ -141,5 +141,41 @@ class HeartRateCsvSummaryTest {
         val series = HeartRateCsvSummary.parseSeries(csv)
         assertThat(series.map { it.elapsedSeconds }).containsExactly(0.0, 1.0, 2.0).inOrder()
         assertThat(series.map { it.bpm }).containsExactly(64, 66, 70).inOrder()
+        assertThat(series.any { it.gapBefore }).isFalse()
+    }
+
+    // --- parseSeries gap detection --------------------------------------
+
+    private fun seriesCsv(vararg elapsed: Double): String = buildString {
+        append(HeartRateCsv.HEADER).append('\n')
+        elapsed.forEachIndexed { i, e ->
+            append("t,").append(i * 1000).append(',')
+                .append(String.format(java.util.Locale.US, "%.2f", e))
+                .append(",60,,\n")
+        }
+    }
+
+    @Test
+    fun `parseSeries flags no gap for steady one-second sampling`() {
+        val series = HeartRateCsvSummary.parseSeries(seriesCsv(0.0, 1.0, 2.0, 3.0, 4.0, 5.0))
+        assertThat(series.any { it.gapBefore }).isFalse()
+    }
+
+    @Test
+    fun `parseSeries flags exactly the point after a long jump in elapsed_s`() {
+        // 1 s spacing, then a 40 s jump before the 5th point.
+        val series = HeartRateCsvSummary.parseSeries(seriesCsv(0.0, 1.0, 2.0, 3.0, 43.0, 44.0))
+        assertThat(series.map { it.gapBefore })
+            .containsExactly(false, false, false, false, true, false)
+            .inOrder()
+    }
+
+    @Test
+    fun `parseSeries gap threshold scales with the median sample spacing`() {
+        // ~5 s spacing: a 12 s step is still normal, a 40 s step is a gap.
+        val series = HeartRateCsvSummary.parseSeries(seriesCsv(0.0, 5.0, 10.0, 22.0, 62.0, 67.0))
+        assertThat(series.map { it.gapBefore })
+            .containsExactly(false, false, false, false, true, false)
+            .inOrder()
     }
 }
