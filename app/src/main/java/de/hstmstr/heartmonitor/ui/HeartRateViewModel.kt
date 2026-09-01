@@ -11,6 +11,7 @@ import de.hstmstr.heartmonitor.ble.DiscoveredDevice
 import de.hstmstr.heartmonitor.data.CsvStorageManager
 import de.hstmstr.heartmonitor.data.DeviceStore
 import de.hstmstr.heartmonitor.data.HeartRateCsvSummary
+import de.hstmstr.heartmonitor.data.RecordingDetail
 import de.hstmstr.heartmonitor.data.RememberedDevice
 import de.hstmstr.heartmonitor.recording.HeartRateStats
 import de.hstmstr.heartmonitor.recording.RecordingService
@@ -239,6 +240,9 @@ class HeartRateViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Re-parse one stored CSV into its min/max/average + duration summary. */
     suspend fun summarize(file: File): HeartRateCsvSummary? = csvStorage.summarize(file)
+
+    /** Summary + bpm-over-time series for the recording-detail screen. */
+    suspend fun recordingDetail(file: File): RecordingDetail? = csvStorage.readDetail(file)
 
     fun deleteRecording(file: File): Boolean = csvStorage.delete(file)
 

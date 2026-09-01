@@ -1,5 +1,6 @@
 package de.hstmstr.heartmonitor.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,7 +39,6 @@ import java.io.File
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,6 +48,7 @@ fun RecordingsScreen(
     onDelete: (File) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpen: (File) -> Unit = {},
     onSummarize: suspend (File) -> HeartRateCsvSummary? = { null },
 ) {
     var pendingDelete by remember { mutableStateOf<File?>(null) }
@@ -90,6 +91,7 @@ fun RecordingsScreen(
                     RecordingRow(
                         file = file,
                         onSummarize = onSummarize,
+                        onOpen = { onOpen(file) },
                         onShare = { onShare(file) },
                         onDelete = { pendingDelete = file },
                     )
@@ -120,6 +122,7 @@ fun RecordingsScreen(
 private fun RecordingRow(
     file: File,
     onSummarize: suspend (File) -> HeartRateCsvSummary?,
+    onOpen: () -> Unit,
     onShare: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -127,7 +130,11 @@ private fun RecordingRow(
         value = onSummarize(file)
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+    ) {
         androidx.compose.foundation.layout.Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -165,7 +172,7 @@ private fun RecordingRow(
 @Composable
 private fun RecordingStatsLine(summary: HeartRateCsvSummary) {
     val stats = summary.stats ?: return
-    val duration = summary.durationSeconds?.let { formatDuration(it) }
+    val duration = summary.durationSeconds?.let { formatElapsed(it) }
     Text(
         text = listOfNotNull(duration, stats.format()).joinToString(" · "),
         style = MaterialTheme.typography.bodySmall,
@@ -181,19 +188,6 @@ private fun formatSize(bytes: Long): String = when {
 
 private fun formatDate(epochMs: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(epochMs))
-
-/** Whole seconds as `m:ss` or, past an hour, `h:mm:ss`. */
-private fun formatDuration(seconds: Double): String {
-    val total = seconds.roundToInt().coerceAtLeast(0)
-    val h = total / 3600
-    val m = total % 3600 / 60
-    val s = total % 60
-    return if (h > 0) {
-        String.format(Locale.US, "%d:%02d:%02d", h, m, s)
-    } else {
-        String.format(Locale.US, "%d:%02d", m, s)
-    }
-}
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true)
 @Composable

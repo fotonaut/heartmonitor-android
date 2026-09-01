@@ -92,4 +92,54 @@ class HeartRateCsvSummaryTest {
         assertThat(summary.sampleCount).isEqualTo(2)
         assertThat(summary.durationSeconds).isWithin(1e-9).of(5.0)
     }
+
+    // --- parseSeries -------------------------------------------------------
+
+    @Test
+    fun `parseSeries round-trips elapsed and bpm from a HeartRateCsv document`() {
+        val samples = listOf(
+            HeartRateSample(bpm = 60, timestampMs = startMs),
+            HeartRateSample(bpm = 150, timestampMs = startMs + 1_500),
+            HeartRateSample(bpm = 90, timestampMs = startMs + 12_340),
+        )
+        val series = HeartRateCsvSummary.parseSeries(HeartRateCsv.build(samples, utc, startMs))
+
+        assertThat(series).hasSize(3)
+        assertThat(series.map { it.bpm }).containsExactly(60, 150, 90).inOrder()
+        assertThat(series[0].elapsedSeconds).isWithin(1e-9).of(0.0)
+        assertThat(series[1].elapsedSeconds).isWithin(1e-9).of(1.5)
+        assertThat(series[2].elapsedSeconds).isWithin(1e-9).of(12.34)
+    }
+
+    @Test
+    fun `parseSeries returns an empty list for a header-only document`() {
+        assertThat(HeartRateCsvSummary.parseSeries(HeartRateCsv.HEADER + "\n")).isEmpty()
+    }
+
+    @Test
+    fun `parseSeries skips blank and short lines`() {
+        val csv = buildString {
+            append(HeartRateCsv.HEADER).append('\n')
+            append("2023-11-14T22:13:20.000Z,1700000000000,0.00,70,,\n")
+            append('\n')
+            append("too,short\n")
+            append("2023-11-14T22:13:30.000Z,1700000010000,10.00,88,,\n")
+        }
+        val series = HeartRateCsvSummary.parseSeries(csv)
+        assertThat(series.map { it.bpm }).containsExactly(70, 88).inOrder()
+        assertThat(series.last().elapsedSeconds).isWithin(1e-9).of(10.0)
+    }
+
+    @Test
+    fun `parseSeries falls back to a 0-based index when elapsed_s is unusable`() {
+        val csv = buildString {
+            append(HeartRateCsv.HEADER).append('\n')
+            append("t,1700000000000,,64,,\n")
+            append("t,1700000001000,oops,66,,\n")
+            append("t,1700000002000,,70,,\n")
+        }
+        val series = HeartRateCsvSummary.parseSeries(csv)
+        assertThat(series.map { it.elapsedSeconds }).containsExactly(0.0, 1.0, 2.0).inOrder()
+        assertThat(series.map { it.bpm }).containsExactly(64, 66, 70).inOrder()
+    }
 }
