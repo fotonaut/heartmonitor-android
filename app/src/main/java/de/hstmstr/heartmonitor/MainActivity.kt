@@ -130,6 +130,7 @@ class MainActivity : ComponentActivity() {
                                 viewModel.deleteRecording(file)
                                 recordings = viewModel.listRecordings()
                             },
+                            onSummarize = viewModel::summarize,
                             onBack = { screen = Screen.MAIN },
                         )
                     }

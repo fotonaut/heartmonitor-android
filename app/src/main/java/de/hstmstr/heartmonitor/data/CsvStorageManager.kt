@@ -77,6 +77,14 @@ class CsvStorageManager(private val context: Context) {
         )
     }
 
+    /**
+     * Re-parses a stored recording into a min/max/average + duration summary.
+     * Runs on [Dispatchers.IO]; returns null if the file cannot be read.
+     */
+    suspend fun summarize(file: File): HeartRateCsvSummary? = withContext(Dispatchers.IO) {
+        runCatching { HeartRateCsvSummary.parse(file.readText(Charsets.UTF_8)) }.getOrNull()
+    }
+
     /** CSV files previously written to app storage, newest first. */
     fun listRecordings(): List<File> =
         appDir().listFiles { f -> f.isFile && f.extension.equals("csv", ignoreCase = true) }

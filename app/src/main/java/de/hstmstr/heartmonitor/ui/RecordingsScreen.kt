@@ -25,17 +25,20 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import de.hstmstr.heartmonitor.data.HeartRateCsvSummary
 import de.hstmstr.heartmonitor.ui.theme.HeartMonitorTheme
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +48,7 @@ fun RecordingsScreen(
     onDelete: (File) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onSummarize: suspend (File) -> HeartRateCsvSummary? = { null },
 ) {
     var pendingDelete by remember { mutableStateOf<File?>(null) }
 
@@ -85,6 +89,7 @@ fun RecordingsScreen(
                 items(recordings, key = { it.absolutePath }) { file ->
                     RecordingRow(
                         file = file,
+                        onSummarize = onSummarize,
                         onShare = { onShare(file) },
                         onDelete = { pendingDelete = file },
                     )
@@ -114,9 +119,14 @@ fun RecordingsScreen(
 @Composable
 private fun RecordingRow(
     file: File,
+    onSummarize: suspend (File) -> HeartRateCsvSummary?,
     onShare: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val summary by produceState<HeartRateCsvSummary?>(initialValue = null, file) {
+        value = onSummarize(file)
+    }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         androidx.compose.foundation.layout.Row(
             modifier = Modifier
@@ -136,6 +146,7 @@ private fun RecordingRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                summary?.let { RecordingStatsLine(it) }
             }
             IconButton(onClick = onShare) {
                 Icon(Icons.Filled.Share, contentDescription = "Teilen")
@@ -151,6 +162,17 @@ private fun RecordingRow(
     }
 }
 
+@Composable
+private fun RecordingStatsLine(summary: HeartRateCsvSummary) {
+    val stats = summary.stats ?: return
+    val duration = summary.durationSeconds?.let { formatDuration(it) }
+    Text(
+        text = listOfNotNull(duration, stats.format()).joinToString(" · "),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 private fun formatSize(bytes: Long): String = when {
     bytes < 1024 -> "$bytes B"
     bytes < 1024 * 1024 -> String.format(Locale.getDefault(), "%.1f KB", bytes / 1024.0)
@@ -159,6 +181,19 @@ private fun formatSize(bytes: Long): String = when {
 
 private fun formatDate(epochMs: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(epochMs))
+
+/** Whole seconds as `m:ss` or, past an hour, `h:mm:ss`. */
+private fun formatDuration(seconds: Double): String {
+    val total = seconds.roundToInt().coerceAtLeast(0)
+    val h = total / 3600
+    val m = total % 3600 / 60
+    val s = total % 60
+    return if (h > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", h, m, s)
+    } else {
+        String.format(Locale.US, "%d:%02d", m, s)
+    }
+}
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true)
 @Composable
