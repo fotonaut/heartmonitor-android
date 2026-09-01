@@ -20,6 +20,12 @@ data class RecordingState(
     val sampleCount: Int = 0,
     val startedAtMs: Long? = null,
     val lastSavedFile: String? = null,
+    /**
+     * Running min/max/average bpm. Updates live while [isRecording] and holds
+     * the final summary of the last session after it stops (null until the
+     * first sample of the first recording).
+     */
+    val stats: HeartRateStats? = null,
 )
 
 /**
@@ -39,6 +45,7 @@ class HeartRateRecorder(
     }
 
     private val buffer = ArrayList<HeartRateSample>()
+    private val stats = HeartRateStatsAccumulator()
     private val lock = Any()
 
     private val _state = MutableStateFlow(RecordingState())
@@ -52,13 +59,21 @@ class HeartRateRecorder(
         scope.launch {
             heartRate.collect { sample ->
                 if (sample != null && _state.value.isRecording) {
-                    val size = synchronized(lock) { buffer.add(sample); buffer.size }
-                    _state.update { it.copy(sampleCount = size) }
+                    val (size, snapshot) = synchronized(lock) {
+                        buffer.add(sample)
+                        stats.add(sample.bpm)
+                        buffer.size to stats.snapshot()
+                    }
+                    _state.update { it.copy(sampleCount = size, stats = snapshot) }
                 }
             }
         }
         scope.launch {
             connectionState.collect { state ->
+                // Reconnecting is deliberately NOT terminal: the BLE manager is
+                // retrying with back-off and the buffer keeps filling once the
+                // strap is back. Only a user disconnect (Idle) or an exhausted
+                // /failed reconnect (Error) ends the recording.
                 val lost = state is BleConnectionState.Idle || state is BleConnectionState.Error
                 if (lost && _state.value.isRecording) {
                     stop(reason = "Verbindung verloren – Aufzeichnung beendet.")
@@ -69,7 +84,10 @@ class HeartRateRecorder(
 
     fun start() {
         if (_state.value.isRecording) return
-        synchronized(lock) { buffer.clear() }
+        synchronized(lock) {
+            buffer.clear()
+            stats.reset()
+        }
         _state.value = RecordingState(isRecording = true, startedAtMs = System.currentTimeMillis())
         _events.tryEmit("Aufzeichnung gestartet.")
     }
@@ -81,19 +99,22 @@ class HeartRateRecorder(
     fun stop(reason: String? = null) {
         if (!_state.value.isRecording) return
         val samples = synchronized(lock) { buffer.toList() }
-        _state.update { it.copy(isRecording = false) }
+        val summary = HeartRateStats.ofSamples(samples)
+        _state.update { it.copy(isRecording = false, stats = summary) }
 
         val prefix = reason?.let { "$it " } ?: ""
         if (samples.isEmpty()) {
             _events.tryEmit("${prefix}Keine Daten aufgezeichnet.")
             return
         }
+        val statsSuffix = summary?.let { " · ${it.format()}" } ?: ""
         scope.launch {
             runCatching { storage.save(samples) }
                 .onSuccess { result ->
                     _state.update { it.copy(lastSavedFile = result.fileName) }
                     _events.tryEmit(
-                        "${prefix}CSV gespeichert (${result.sampleCount} Werte): ${result.displayLocation}",
+                        "${prefix}CSV gespeichert (${result.sampleCount} Werte$statsSuffix): " +
+                            result.displayLocation,
                     )
                 }
                 .onFailure { e ->

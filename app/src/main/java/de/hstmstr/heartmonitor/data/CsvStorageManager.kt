@@ -11,10 +11,7 @@ import de.hstmstr.heartmonitor.ble.HeartRateSample
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 /** Where a recording ended up on disk. */
 data class CsvSaveResult(
@@ -45,13 +42,6 @@ class CsvStorageManager(private val context: Context) {
         private const val TAG = "CsvStorageManager"
         private const val APP_SUBDIR = "recordings"
         private const val PUBLIC_SUBDIR = "HeartMonitor"
-        private const val CSV_HEADER =
-            "timestamp_iso,timestamp_epoch_ms,elapsed_s,bpm,sensor_contact,rr_ms"
-
-        private val FILE_TIMESTAMP: DateTimeFormatter =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss", Locale.US)
-        private val ROW_TIMESTAMP: DateTimeFormatter =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
     }
 
     /**
@@ -63,9 +53,8 @@ class CsvStorageManager(private val context: Context) {
 
         val zone = ZoneId.systemDefault()
         val startMs = samples.first().timestampMs
-        val fileName = "hr_" +
-            Instant.ofEpochMilli(startMs).atZone(zone).format(FILE_TIMESTAMP) + ".csv"
-        val csv = buildCsv(samples, zone, startMs)
+        val fileName = HeartRateCsv.fileName(startMs, zone)
+        val csv = HeartRateCsv.build(samples, zone, startMs)
 
         val appFile = writeToAppStorage(fileName, csv)
 
@@ -94,32 +83,41 @@ class CsvStorageManager(private val context: Context) {
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
-    /** Deletes a recording from app storage. Returns true on success. */
-    fun delete(file: File): Boolean =
-        runCatching { file.parentFile == appDir() && file.delete() }.getOrDefault(false)
+    /**
+     * Deletes a recording. Removes the app-storage copy and, best effort on
+     * API 29+, the identically named public copy in `Downloads/HeartMonitor/`.
+     * Returns true when the app-storage copy was removed (that is the file the
+     * recordings list shows).
+     */
+    fun delete(file: File): Boolean {
+        val appDeleted =
+            runCatching { file.parentFile == appDir() && file.delete() }.getOrDefault(false)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            runCatching { deleteFromDownloads(file.name) }
+                .onSuccess { removed ->
+                    if (removed > 0) Log.d(TAG, "Removed public copy of ${file.name}")
+                }
+                .onFailure { Log.w(TAG, "MediaStore delete failed for ${file.name}", it) }
+        }
+        return appDeleted
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun deleteFromDownloads(fileName: String): Int {
+        val resolver = context.contentResolver
+        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        // MediaStore normalises the RELATIVE_PATH we wrote to a trailing slash.
+        val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/$PUBLIC_SUBDIR/"
+        val selection =
+            "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?"
+        return resolver.delete(collection, selection, arrayOf(fileName, relativePath))
+    }
 
     /** Directory that [listRecordings] reads from (also declared in file_paths.xml). */
     fun recordingsDir(): File = appDir()
 
     // -----------------------------------------------------------------
-
-    private fun buildCsv(samples: List<HeartRateSample>, zone: ZoneId, startMs: Long): String {
-        val sb = StringBuilder(CSV_HEADER.length + samples.size * 48)
-        sb.append(CSV_HEADER).append('\n')
-        for (s in samples) {
-            val iso = Instant.ofEpochMilli(s.timestampMs).atZone(zone).format(ROW_TIMESTAMP)
-            val elapsed = (s.timestampMs - startMs) / 1000.0
-            val contact = s.sensorContact?.toString() ?: ""
-            val rr = s.rrIntervalsMs.joinToString(separator = " ")
-            sb.append(iso).append(',')
-                .append(s.timestampMs).append(',')
-                .append(String.format(Locale.US, "%.2f", elapsed)).append(',')
-                .append(s.bpm).append(',')
-                .append(contact).append(',')
-                .append(rr).append('\n')
-        }
-        return sb.toString()
-    }
 
     private fun appDir(): File =
         File(context.getExternalFilesDir(null) ?: context.filesDir, APP_SUBDIR).apply { mkdirs() }

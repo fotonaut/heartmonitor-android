@@ -28,6 +28,19 @@ sealed interface BleConnectionState {
     /** Device found, GATT connection / service discovery in progress. */
     data class Connecting(val deviceName: String?) : BleConnectionState
 
+    /**
+     * Link dropped unexpectedly; an automatic reconnect to the last device is
+     * scheduled or in flight. A running recording keeps buffering meanwhile.
+     *
+     * @param attempt 1-based index of the current retry
+     * @param maxAttempts total retries before giving up with [Error]
+     */
+    data class Reconnecting(
+        val deviceName: String?,
+        val attempt: Int,
+        val maxAttempts: Int,
+    ) : BleConnectionState
+
     /** Connected and receiving (or about to receive) notifications. */
     data class Connected(val deviceName: String?) : BleConnectionState
 

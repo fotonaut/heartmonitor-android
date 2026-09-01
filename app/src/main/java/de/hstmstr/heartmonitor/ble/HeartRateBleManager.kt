@@ -26,7 +26,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
-import kotlin.math.roundToInt
 
 /**
  * Owns the whole BLE lifecycle for a Bluetooth SIG "Heart Rate" sensor
@@ -60,6 +59,14 @@ class HeartRateBleManager(private val context: Context) {
 
         /** Name fragments that mark a device as a likely heart-rate strap. */
         private val NAME_HINTS = listOf("hr50", "igpsport", "hrm", "heart", "polar", "hr ")
+
+        /**
+         * Back-off before each automatic reconnect attempt after an unexpected
+         * drop. One entry per attempt; [MAX_RECONNECT_ATTEMPTS] is its length.
+         * A running recording keeps buffering across the whole window.
+         */
+        private val RECONNECT_BACKOFF_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000)
+        private val MAX_RECONNECT_ATTEMPTS = RECONNECT_BACKOFF_MS.size
     }
 
     private val bluetoothManager: BluetoothManager? =
@@ -82,6 +89,15 @@ class HeartRateBleManager(private val context: Context) {
 
     /** Set when only a name match (no advertised 0x180D) was seen; used at timeout. */
     private var fallbackCandidate: BluetoothDevice? = null
+
+    /** Last device we actively connected to – the target for auto-reconnect. */
+    private var lastDevice: BluetoothDevice? = null
+
+    /** True while the current teardown was asked for by the user (no reconnect). */
+    private var userInitiatedDisconnect = false
+
+    /** Number of auto-reconnect attempts made since the last good connection. */
+    private var reconnectAttempts = 0
 
     // ---------------------------------------------------------------------
     // Public API
@@ -157,9 +173,12 @@ class HeartRateBleManager(private val context: Context) {
         }
 
         // Disconnect any stale link before starting fresh.
+        cancelReconnect()
         closeGatt()
         _heartRate.value = null
         fallbackCandidate = null
+        lastDevice = null
+        userInitiatedDisconnect = false
 
         // Scan unfiltered and match in software: some straps advertise 0x180D
         // only in the scan response (or not at all), which a hardware
@@ -185,6 +204,8 @@ class HeartRateBleManager(private val context: Context) {
     /** Stop scanning and tear down any GATT connection. */
     @SuppressLint("MissingPermission")
     fun disconnect() {
+        userInitiatedDisconnect = true
+        cancelReconnect()
         stopScan()
         closeGatt()
         _heartRate.value = null
@@ -193,6 +214,7 @@ class HeartRateBleManager(private val context: Context) {
 
     /** Call from ViewModel.onCleared(). */
     fun close() {
+        userInitiatedDisconnect = true
         mainHandler.removeCallbacksAndMessages(null)
         stopScan()
         closeGatt()
@@ -281,6 +303,8 @@ class HeartRateBleManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     private fun connect(device: BluetoothDevice) {
+        lastDevice = device
+        userInitiatedDisconnect = false
         _connectionState.value = BleConnectionState.Connecting(device.safeName())
         gatt = try {
             device.connectGatt(context, /* autoConnect = */ false, gattCallback, BluetoothDevice.TRANSPORT_LE)
@@ -288,6 +312,47 @@ class HeartRateBleManager(private val context: Context) {
             emitError("Verbindung nicht erlaubt: ${e.message}")
             null
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Auto-reconnect
+    // ---------------------------------------------------------------------
+
+    private val reconnectRunnable = Runnable {
+        val device = lastDevice
+        if (userInitiatedDisconnect || device == null) return@Runnable
+        Log.d(TAG, "Auto-reconnect attempt $reconnectAttempts to ${device.address}")
+        connect(device)
+    }
+
+    /**
+     * Called from the GATT callback after an unexpected drop. Schedules the next
+     * reconnect with back-off, or emits a terminal error once attempts run out.
+     */
+    private fun scheduleReconnect() {
+        val device = lastDevice ?: run {
+            _connectionState.value = BleConnectionState.Error("Verbindung verloren.")
+            return
+        }
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            Log.w(TAG, "Auto-reconnect gave up after $reconnectAttempts attempts")
+            _connectionState.value =
+                BleConnectionState.Error("Verbindung verloren – kein Reconnect möglich.")
+            return
+        }
+        val delay = RECONNECT_BACKOFF_MS[reconnectAttempts]
+        reconnectAttempts++
+        _connectionState.value = BleConnectionState.Reconnecting(
+            deviceName = device.safeName(),
+            attempt = reconnectAttempts,
+            maxAttempts = MAX_RECONNECT_ATTEMPTS,
+        )
+        mainHandler.postDelayed(reconnectRunnable, delay)
+    }
+
+    private fun cancelReconnect() {
+        mainHandler.removeCallbacks(reconnectRunnable)
+        reconnectAttempts = 0
     }
 
     @SuppressLint("MissingPermission")
@@ -313,12 +378,14 @@ class HeartRateBleManager(private val context: Context) {
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     closeGatt()
                     _heartRate.value = null
-                    _connectionState.value =
-                        if (status == BluetoothGatt.GATT_SUCCESS) {
-                            BleConnectionState.Idle
-                        } else {
-                            BleConnectionState.Error("Verbindung getrennt (Status $status).")
-                        }
+                    if (userInitiatedDisconnect) {
+                        _connectionState.value = BleConnectionState.Idle
+                    } else {
+                        // Unexpected drop (out of range, strap off, radio glitch):
+                        // keep any recording alive and retry with back-off.
+                        Log.d(TAG, "Unexpected disconnect (status $status) – scheduling reconnect")
+                        scheduleReconnect()
+                    }
                 }
             }
         }
@@ -341,7 +408,7 @@ class HeartRateBleManager(private val context: Context) {
             val cccd = characteristic.getDescriptor(CCC_DESCRIPTOR_UUID)
             if (cccd == null) {
                 // No descriptor: some sensors still push notifications anyway.
-                _connectionState.value = BleConnectionState.Connected(g.device.safeName())
+                markConnected(g)
                 return
             }
 
@@ -365,7 +432,7 @@ class HeartRateBleManager(private val context: Context) {
         ) {
             if (descriptor.uuid != CCC_DESCRIPTOR_UUID) return
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                _connectionState.value = BleConnectionState.Connected(g.device.safeName())
+                markConnected(g)
             } else {
                 emitError("Benachrichtigungen aktivieren fehlgeschlagen (Status $status).")
             }
@@ -378,7 +445,7 @@ class HeartRateBleManager(private val context: Context) {
             value: ByteArray,
         ) {
             if (characteristic.uuid == HEART_RATE_MEASUREMENT_UUID) {
-                decodeHeartRate(value)?.let { _heartRate.value = it }
+                HeartRateMeasurementParser.decode(value)?.let { _heartRate.value = it }
             }
         }
 
@@ -391,65 +458,21 @@ class HeartRateBleManager(private val context: Context) {
         ) {
             if (characteristic.uuid == HEART_RATE_MEASUREMENT_UUID) {
                 val value = characteristic.value ?: return
-                decodeHeartRate(value)?.let { _heartRate.value = it }
+                HeartRateMeasurementParser.decode(value)?.let { _heartRate.value = it }
             }
         }
-    }
-
-    // ---------------------------------------------------------------------
-    // Payload decoding – Bluetooth SIG "Heart Rate Measurement" (0x2A37)
-    // ---------------------------------------------------------------------
-
-    /**
-     * Layout:
-     *   byte 0        flags
-     *     bit 0       value format: 0 = UINT8, 1 = UINT16
-     *     bit 1..2    sensor contact status (bit2 = supported, bit1 = detected)
-     *     bit 3       energy expended field present
-     *     bit 4       RR-interval field(s) present
-     *   byte 1..2     heart rate value (UINT8 or UINT16, little-endian)
-     *   [2 bytes]     energy expended (UINT16) – optional
-     *   [n*2 bytes]   RR intervals (UINT16, units of 1/1024 s) – optional
-     */
-    private fun decodeHeartRate(data: ByteArray): HeartRateSample? {
-        if (data.isEmpty()) return null
-        val flags = data[0].toInt() and 0xFF
-        val is16Bit = flags and 0x01 == 0x01
-        var offset = 1
-
-        val bpm: Int = if (is16Bit) {
-            if (data.size < offset + 2) return null
-            val v = (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
-            offset += 2
-            v
-        } else {
-            if (data.size < offset + 1) return null
-            val v = data[offset].toInt() and 0xFF
-            offset += 1
-            v
-        }
-
-        val contactSupported = flags and 0x04 == 0x04
-        val contactDetected = flags and 0x02 == 0x02
-        val sensorContact = if (contactSupported) contactDetected else null
-
-        if (flags and 0x08 == 0x08) offset += 2 // skip energy expended
-
-        val rr = ArrayList<Int>()
-        if (flags and 0x10 == 0x10) {
-            while (data.size >= offset + 2) {
-                val raw = (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
-                rr += (raw * 1000.0 / 1024.0).roundToInt()
-                offset += 2
-            }
-        }
-
-        return HeartRateSample(bpm = bpm, sensorContact = sensorContact, rrIntervalsMs = rr)
     }
 
     // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
+
+    /** Reached a live subscription: publish [BleConnectionState.Connected] and
+     *  clear the auto-reconnect counter so the next drop starts fresh. */
+    private fun markConnected(g: BluetoothGatt) {
+        reconnectAttempts = 0
+        _connectionState.value = BleConnectionState.Connected(g.device.safeName())
+    }
 
     private fun emitError(message: String) {
         Log.w(TAG, message)

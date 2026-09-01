@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import de.hstmstr.heartmonitor.HeartMonitorApp
 import de.hstmstr.heartmonitor.ble.BleConnectionState
 import de.hstmstr.heartmonitor.data.CsvStorageManager
+import de.hstmstr.heartmonitor.recording.HeartRateStats
 import de.hstmstr.heartmonitor.recording.RecordingService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,18 +29,23 @@ data class HeartRateUiState(
     val isRecording: Boolean = false,
     val recordedSampleCount: Int = 0,
     val lastSavedFile: String? = null,
+    /** Running (or last completed) min/max/average bpm of a recording. */
+    val stats: HeartRateStats? = null,
     /** Transient one-shot message for a snackbar; cleared via [HeartRateViewModel.consumeMessage]. */
     val message: String? = null,
 ) {
     val isConnected: Boolean get() = connection is BleConnectionState.Connected
     val isBusy: Boolean
-        get() = connection is BleConnectionState.Scanning || connection is BleConnectionState.Connecting
+        get() = connection is BleConnectionState.Scanning ||
+            connection is BleConnectionState.Connecting ||
+            connection is BleConnectionState.Reconnecting
 
     /** Label for the scan/connect button. */
     val connectButtonLabel: String
         get() = when (connection) {
             is BleConnectionState.Scanning -> "Suche abbrechen"
             is BleConnectionState.Connecting -> "Verbindung abbrechen"
+            is BleConnectionState.Reconnecting -> "Reconnect abbrechen"
             is BleConnectionState.Connected -> "Trennen"
             else -> "Scannen / Verbinden"
         }
@@ -73,6 +79,7 @@ class HeartRateViewModel(application: Application) : AndroidViewModel(applicatio
             isRecording = recording.isRecording,
             recordedSampleCount = recording.sampleCount,
             lastSavedFile = recording.lastSavedFile,
+            stats = recording.stats,
             message = message,
         )
     }.stateIn(
@@ -104,6 +111,7 @@ class HeartRateViewModel(application: Application) : AndroidViewModel(applicatio
         when (uiState.value.connection) {
             is BleConnectionState.Scanning,
             is BleConnectionState.Connecting,
+            is BleConnectionState.Reconnecting,
             is BleConnectionState.Connected -> bleManager.disconnect()
 
             else -> startScan()

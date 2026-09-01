@@ -46,6 +46,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.hstmstr.heartmonitor.ble.BleConnectionState
+import de.hstmstr.heartmonitor.recording.HeartRateStats
 import de.hstmstr.heartmonitor.ui.theme.HeartMonitorTheme
 
 /**
@@ -130,6 +131,9 @@ private fun ConnectionStatus(state: HeartRateUiState) {
             "Suche Pulsgurt…" to MaterialTheme.colorScheme.onSurfaceVariant
         is BleConnectionState.Connecting ->
             "Verbinde${c.deviceName?.let { " mit $it" } ?: ""}…" to MaterialTheme.colorScheme.onSurfaceVariant
+        is BleConnectionState.Reconnecting ->
+            "Verbindung verloren – neuer Versuch ${c.attempt}/${c.maxAttempts}…" to
+                MaterialTheme.colorScheme.error
         is BleConnectionState.Connected ->
             "Verbunden${c.deviceName?.let { " mit $it" } ?: ""}" to MaterialTheme.colorScheme.primary
         is BleConnectionState.Error ->
@@ -213,6 +217,13 @@ private fun RecordingInfo(state: HeartRateUiState) {
                 )
             }
         }
+        state.stats?.let { s ->
+            Text(
+                text = if (state.isRecording) s.format() else "Letzte Aufzeichnung: ${s.format()}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         state.lastSavedFile?.let {
             Text(
                 text = "Zuletzt gespeichert: $it",
@@ -285,7 +296,27 @@ private fun PreviewRecording() {
                 sensorContact = true,
                 isRecording = true,
                 recordedSampleCount = 87,
+                stats = HeartRateStats(count = 87, minBpm = 96, maxBpm = 152, averageBpm = 138.4),
                 lastSavedFile = "hr_2026-09-01_14-30-05.csv",
+            ),
+            onConnectClick = {},
+            onRecordClick = {},
+            onMessageShown = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Reconnect während Aufnahme")
+@Composable
+private fun PreviewReconnecting() {
+    HeartMonitorTheme {
+        HeartRateScreen(
+            state = HeartRateUiState(
+                connection = BleConnectionState.Reconnecting("HR50", attempt = 2, maxAttempts = 5),
+                bpm = null,
+                isRecording = true,
+                recordedSampleCount = 213,
+                stats = HeartRateStats(count = 213, minBpm = 88, maxBpm = 171, averageBpm = 142.0),
             ),
             onConnectClick = {},
             onRecordClick = {},
