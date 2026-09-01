@@ -122,6 +122,15 @@ private fun RecordingDetailContent(detail: RecordingDetail, modifier: Modifier =
                 .fillMaxWidth()
                 .height(240.dp),
         )
+
+        if (detail.series.size >= 2) {
+            Text(
+                text = "Tippen oder ziehen für Einzelwerte",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            BpmZoneLegend(Modifier.fillMaxWidth())
+        }
     }
 }
 

@@ -8,10 +8,15 @@ import de.hstmstr.heartmonitor.recording.HeartRateStats
  * @param elapsedSeconds  seconds since the first sample (the CSV `elapsed_s`
  *                        column), or a 0-based index when that column is unusable
  * @param bpm             heart rate at that point
+ * @param gapBefore       true when a long jump in elapsed time precedes this
+ *                        point (a recording gap, e.g. an auto-reconnect) – the
+ *                        chart breaks the line here instead of drawing a long
+ *                        diagonal. Always false in index-fallback mode.
  */
 data class BpmTrackPoint(
     val elapsedSeconds: Double,
     val bpm: Int,
+    val gapBefore: Boolean = false,
 )
 
 /**
@@ -35,6 +40,12 @@ data class HeartRateCsvSummary(
         private const val COL_EPOCH_MS = 1
         private const val COL_ELAPSED_S = 2
         private const val COL_BPM = 3
+
+        // A jump in elapsed_s larger than this counts as a recording gap: long
+        // enough to ignore a few skipped beats, short enough to catch a
+        // reconnect (backoff tops out at 15 s over 5 attempts).
+        private const val GAP_MIN_SECONDS = 8.0
+        private const val GAP_MEDIAN_FACTOR = 6.0
 
         /** One parsed data row; the header, blank and short lines never reach this. */
         private class Row(val epochMs: Long?, val elapsedS: Double?, val bpm: Int)
@@ -85,12 +96,30 @@ data class HeartRateCsvSummary(
         fun parseSeries(csv: String): List<BpmTrackPoint> {
             val rows = rows(csv)
             val useElapsed = rows.isNotEmpty() && rows.all { it.elapsedS != null }
+            if (!useElapsed) {
+                return rows.mapIndexed { i, r -> BpmTrackPoint(i.toDouble(), r.bpm) }
+            }
+            val elapsed = rows.map { it.elapsedS!! }
+            val gapThreshold = gapThresholdSeconds(elapsed)
             return rows.mapIndexed { i, r ->
                 BpmTrackPoint(
-                    elapsedSeconds = if (useElapsed) r.elapsedS!! else i.toDouble(),
+                    elapsedSeconds = elapsed[i],
                     bpm = r.bpm,
+                    gapBefore = i > 0 && elapsed[i] - elapsed[i - 1] > gapThreshold,
                 )
             }
+        }
+
+        /**
+         * `max(GAP_MIN_SECONDS, GAP_MEDIAN_FACTOR × median sample spacing)` – the
+         * median keeps the rule sensible when a strap samples every few seconds
+         * rather than once a second.
+         */
+        private fun gapThresholdSeconds(elapsed: List<Double>): Double {
+            val deltas = elapsed.zipWithNext { a, b -> b - a }.filter { it > 0.0 }.sorted()
+            if (deltas.isEmpty()) return GAP_MIN_SECONDS
+            val median = deltas[deltas.size / 2]
+            return maxOf(GAP_MIN_SECONDS, median * GAP_MEDIAN_FACTOR)
         }
     }
 }
