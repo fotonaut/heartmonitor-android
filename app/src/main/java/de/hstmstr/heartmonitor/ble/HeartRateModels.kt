@@ -17,6 +17,26 @@ data class HeartRateSample(
     val rrIntervalsMs: List<Int> = emptyList(),
 )
 
+/**
+ * A peripheral seen during a scan, surfaced to the device picker.
+ *
+ * @param address             hardware MAC address – stable id, also the
+ *                            persistence key for the "last used" device
+ * @param name                advertised name, null when not broadcast
+ * @param rssi                signal strength in dBm (higher = closer)
+ * @param advertisesHrService true when the device broadcast the 0x180D
+ *                            Heart Rate service; such devices sort first and,
+ *                            once true, stay true for later sightings
+ */
+data class DiscoveredDevice(
+    val address: String,
+    val name: String?,
+    val rssi: Int,
+    val advertisesHrService: Boolean,
+) {
+    val displayName: String get() = name?.takeIf { it.isNotBlank() } ?: "(unbenanntes Gerät)"
+}
+
 /** High-level state of the BLE link, surfaced to the ViewModel/UI. */
 sealed interface BleConnectionState {
     /** Nothing running – not scanning, not connected. */
@@ -26,7 +46,7 @@ sealed interface BleConnectionState {
     data object Scanning : BleConnectionState
 
     /** Device found, GATT connection / service discovery in progress. */
-    data class Connecting(val deviceName: String?) : BleConnectionState
+    data class Connecting(val deviceName: String?, val address: String? = null) : BleConnectionState
 
     /**
      * Link dropped unexpectedly; an automatic reconnect to the last device is
@@ -42,7 +62,7 @@ sealed interface BleConnectionState {
     ) : BleConnectionState
 
     /** Connected and receiving (or about to receive) notifications. */
-    data class Connected(val deviceName: String?) : BleConnectionState
+    data class Connected(val deviceName: String?, val address: String? = null) : BleConnectionState
 
     /** Terminal error; [message] is user-presentable (German). */
     data class Error(val message: String) : BleConnectionState

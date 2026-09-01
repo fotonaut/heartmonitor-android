@@ -25,14 +25,16 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.util.UUID
 
 /**
  * Owns the whole BLE lifecycle for a Bluetooth SIG "Heart Rate" sensor
  * (e.g. iGPSPORT HR50):
  *
- *  1. scan for peripherals advertising the Heart Rate service (0x180D)
- *  2. connect to the first match and discover its GATT services
+ *  1. scan for peripherals; collect them into [discoveredDevices] for the picker
+ *  2. connect – either to a caller-named address, or auto to a remembered one
+ *     as soon as it shows up during the scan
  *  3. subscribe to the Heart Rate Measurement characteristic (0x2A37)
  *  4. decode each notification and expose it as a [HeartRateSample] via [Flow]
  *
@@ -56,9 +58,6 @@ class HeartRateBleManager(private val context: Context) {
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         private const val SCAN_TIMEOUT_MS = 15_000L
-
-        /** Name fragments that mark a device as a likely heart-rate strap. */
-        private val NAME_HINTS = listOf("hr50", "igpsport", "hrm", "heart", "polar", "hr ")
 
         /**
          * Back-off before each automatic reconnect attempt after an unexpected
@@ -84,11 +83,19 @@ class HeartRateBleManager(private val context: Context) {
     private val _heartRate = MutableStateFlow<HeartRateSample?>(null)
     val heartRate: StateFlow<HeartRateSample?> = _heartRate.asStateFlow()
 
+    /** Devices seen during the current/most-recent scan, for the picker UI. */
+    private val _discoveredDevices = MutableStateFlow<List<DiscoveredDevice>>(emptyList())
+    val discoveredDevices: StateFlow<List<DiscoveredDevice>> = _discoveredDevices.asStateFlow()
+
     private var gatt: BluetoothGatt? = null
     private var scanning = false
 
-    /** Set when only a name match (no advertised 0x180D) was seen; used at timeout. */
-    private var fallbackCandidate: BluetoothDevice? = null
+    /** While scanning: connect automatically once this address shows up. */
+    private var autoConnectAddress: String? = null
+
+    /** True while the running scan only feeds the picker (no auto-connect, no
+     *  "nothing found" error – the picker shows its own empty state). */
+    private var pickerScan = false
 
     /** Last device we actively connected to – the target for auto-reconnect. */
     private var lastDevice: BluetoothDevice? = null
@@ -144,9 +151,17 @@ class HeartRateBleManager(private val context: Context) {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }
 
-    /** Begin scanning; auto-connects to the first Heart Rate peripheral found. */
+    /**
+     * Begin scanning and populate [discoveredDevices].
+     *
+     * @param autoConnectTo if non-null, connect automatically as soon as a
+     *        device with this address is seen (quick path / startup reconnect).
+     *        When it never appears the scan times out with an error.
+     * @param forPicker true when the scan only feeds the device picker: no
+     *        auto-connect, and a fruitless scan ends quietly instead of erroring.
+     */
     @SuppressLint("MissingPermission")
-    fun startScan() {
+    fun startScan(autoConnectTo: String? = null, forPicker: Boolean = false) {
         val adapter = adapter
         if (adapter == null) {
             emitError("Dieses Gerät unterstützt kein Bluetooth.")
@@ -176,7 +191,9 @@ class HeartRateBleManager(private val context: Context) {
         cancelReconnect()
         closeGatt()
         _heartRate.value = null
-        fallbackCandidate = null
+        _discoveredDevices.value = emptyList()
+        autoConnectAddress = autoConnectTo
+        pickerScan = forPicker
         lastDevice = null
         userInitiatedDisconnect = false
 
@@ -205,11 +222,44 @@ class HeartRateBleManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun disconnect() {
         userInitiatedDisconnect = true
+        autoConnectAddress = null
+        pickerScan = false
         cancelReconnect()
         stopScan()
         closeGatt()
         _heartRate.value = null
         _connectionState.value = BleConnectionState.Idle
+    }
+
+    /**
+     * Connect straight to a picked device by address, without scanning.
+     * The address comes from [discoveredDevices] or the remembered device.
+     */
+    @SuppressLint("MissingPermission")
+    fun connectTo(address: String) {
+        val adapter = adapter
+        if (adapter == null || !adapter.isEnabled) {
+            emitError("Bitte Bluetooth aktivieren.")
+            return
+        }
+        if (missingPermissions().isNotEmpty()) {
+            emitError("Erforderliche Berechtigungen fehlen.")
+            return
+        }
+        val device = try {
+            adapter.getRemoteDevice(address)
+        } catch (e: IllegalArgumentException) {
+            emitError("Ungültige Geräteadresse: $address")
+            return
+        }
+        cancelReconnect()
+        stopScan()
+        closeGatt()
+        _heartRate.value = null
+        autoConnectAddress = null
+        pickerScan = false
+        userInitiatedDisconnect = false
+        connect(device)
     }
 
     /** Call from ViewModel.onCleared(). */
@@ -227,23 +277,27 @@ class HeartRateBleManager(private val context: Context) {
     private val scanTimeoutRunnable = Runnable {
         if (!scanning) return@Runnable
         stopScan()
-        val candidate = fallbackCandidate
-        if (candidate != null) {
-            Log.d(TAG, "No 0x180D advertiser; connecting name-matched ${candidate.address}")
-            connect(candidate)
-        } else if (_connectionState.value is BleConnectionState.Scanning) {
-            emitError(
+        when {
+            _connectionState.value !is BleConnectionState.Scanning -> Unit // already connecting
+            autoConnectAddress != null -> emitError(
+                "Gerät nicht in Reichweite. Prüfen: HR50 aktiv/angelegt, " +
+                    "nicht mit anderer App/Uhr verbunden.",
+            )
+            pickerScan -> _connectionState.value = BleConnectionState.Idle
+            _discoveredDevices.value.isEmpty() -> emitError(
                 "Kein Pulsgurt gefunden. Prüfen: HR50 aktiv/angelegt, " +
                     "nicht mit anderer App/Uhr verbunden, Standort eingeschaltet.",
             )
+            else -> _connectionState.value = BleConnectionState.Idle
         }
     }
 
     private val scanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device ?: return
             val record = result.scanRecord
-            val advName = record?.deviceName
+            val advName = record?.deviceName ?: device.safeName()
             val advertisedUuids = record?.serviceUuids
             Log.d(
                 TAG,
@@ -252,19 +306,28 @@ class HeartRateBleManager(private val context: Context) {
 
             val advertisesHrService =
                 advertisedUuids?.any { it.uuid == HEART_RATE_SERVICE_UUID } == true
-            if (advertisesHrService) {
-                stopScan()
-                connect(device)
-                return
+
+            // Feed the picker. Keep nameless beacons out – a heart-rate strap
+            // either advertises 0x180D or at least broadcasts a name.
+            if (advertisesHrService || !advName.isNullOrBlank()) {
+                _discoveredDevices.update { current ->
+                    DeviceScanList.merge(
+                        current,
+                        DiscoveredDevice(
+                            address = device.address,
+                            name = advName,
+                            rssi = result.rssi,
+                            advertisesHrService = advertisesHrService,
+                        ),
+                    )
+                }
             }
 
-            // Weaker signal: name looks like a HR strap. Remember it and keep
-            // scanning in case a proper 0x180D advertiser shows up.
-            if (advName != null && NAME_HINTS.any { advName.contains(it, ignoreCase = true) }) {
-                if (fallbackCandidate == null) {
-                    Log.d(TAG, "Name match, keeping as fallback: $advName")
-                }
-                fallbackCandidate = device
+            // Quick path / startup reconnect: grab the remembered device as
+            // soon as it appears.
+            if (device.address == autoConnectAddress) {
+                stopScan()
+                connect(device)
             }
         }
 
@@ -305,7 +368,7 @@ class HeartRateBleManager(private val context: Context) {
     private fun connect(device: BluetoothDevice) {
         lastDevice = device
         userInitiatedDisconnect = false
-        _connectionState.value = BleConnectionState.Connecting(device.safeName())
+        _connectionState.value = BleConnectionState.Connecting(device.safeName(), device.address)
         gatt = try {
             device.connectGatt(context, /* autoConnect = */ false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         } catch (e: SecurityException) {
@@ -370,7 +433,8 @@ class HeartRateBleManager(private val context: Context) {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    _connectionState.value = BleConnectionState.Connecting(g.device.safeName())
+                    _connectionState.value =
+                        BleConnectionState.Connecting(g.device.safeName(), g.device.address)
                     // Small delay improves reliability on some phones/straps.
                     mainHandler.postDelayed({ runCatching { g.discoverServices() } }, 200)
                 }
@@ -471,7 +535,7 @@ class HeartRateBleManager(private val context: Context) {
      *  clear the auto-reconnect counter so the next drop starts fresh. */
     private fun markConnected(g: BluetoothGatt) {
         reconnectAttempts = 0
-        _connectionState.value = BleConnectionState.Connected(g.device.safeName())
+        _connectionState.value = BleConnectionState.Connected(g.device.safeName(), g.device.address)
     }
 
     private fun emitError(message: String) {
