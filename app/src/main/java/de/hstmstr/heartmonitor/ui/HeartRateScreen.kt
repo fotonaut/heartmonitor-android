@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -84,7 +85,20 @@ fun HeartRateScreen(
         modifier = modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                title = { Text("HeartMonitor") },
+                title = {
+                    // App wordmark: deliberately set apart from the rest of the
+                    // UI (which uses the default Material sans typography) via a
+                    // monospace face, wide tracking, extra size and the accent
+                    // colour.
+                    Text(
+                        text = "HrtMntr",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 26.sp,
+                        letterSpacing = 2.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                },
                 actions = {
                     IconButton(onClick = onOpenRecordings) {
                         Icon(
@@ -131,7 +145,7 @@ private fun ConnectionStatus(state: HeartRateUiState) {
         is BleConnectionState.Idle ->
             "Nicht verbunden" to MaterialTheme.colorScheme.onSurfaceVariant
         is BleConnectionState.Scanning ->
-            "Suche Pulsgurt…" to MaterialTheme.colorScheme.onSurfaceVariant
+            "Suche Pulssensor…" to MaterialTheme.colorScheme.onSurfaceVariant
         is BleConnectionState.Connecting ->
             "Verbinde${c.deviceName?.let { " mit $it" } ?: ""}…" to MaterialTheme.colorScheme.onSurfaceVariant
         is BleConnectionState.Reconnecting ->
