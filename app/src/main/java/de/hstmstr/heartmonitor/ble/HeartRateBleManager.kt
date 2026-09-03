@@ -29,8 +29,11 @@ import kotlinx.coroutines.flow.update
 import java.util.UUID
 
 /**
- * Owns the whole BLE lifecycle for a Bluetooth SIG "Heart Rate" sensor
- * (e.g. iGPSPORT HR50):
+ * Owns the whole BLE lifecycle for any Bluetooth SIG "Heart Rate" sensor.
+ * Nothing here is tied to a specific model – it matches on the standard
+ * 0x180D service / 0x2A37 characteristic, so any compliant strap works
+ * (verified with the iGPSPORT HR50; Polar H10, Garmin HRM, Wahoo TICKR and
+ * similar advertise the same service):
  *
  *  1. scan for peripherals; collect them into [discoveredDevices] for the picker
  *  2. connect – either to a caller-named address, or auto to a remembered one
@@ -280,12 +283,12 @@ class HeartRateBleManager(private val context: Context) {
         when {
             _connectionState.value !is BleConnectionState.Scanning -> Unit // already connecting
             autoConnectAddress != null -> emitError(
-                "Gerät nicht in Reichweite. Prüfen: HR50 aktiv/angelegt, " +
+                "Gerät nicht in Reichweite. Prüfen: Pulssensor aktiv/angelegt, " +
                     "nicht mit anderer App/Uhr verbunden.",
             )
             pickerScan -> _connectionState.value = BleConnectionState.Idle
             _discoveredDevices.value.isEmpty() -> emitError(
-                "Kein Pulsgurt gefunden. Prüfen: HR50 aktiv/angelegt, " +
+                "Kein Pulssensor gefunden. Prüfen: Sensor aktiv/angelegt, " +
                     "nicht mit anderer App/Uhr verbunden, Standort eingeschaltet.",
             )
             else -> _connectionState.value = BleConnectionState.Idle

@@ -48,14 +48,18 @@ data class HeartRateUiState(
             connection is BleConnectionState.Connecting ||
             connection is BleConnectionState.Reconnecting
 
-    /** Label for the scan/connect button. */
+    /**
+     * Label for the scan/connect button. Device-type generic: with no remembered
+     * strap it invites connecting any BLE heart-rate sensor; once one is
+     * remembered it names it.
+     */
     val connectButtonLabel: String
         get() = when (connection) {
             is BleConnectionState.Scanning -> "Suche abbrechen"
             is BleConnectionState.Connecting -> "Verbindung abbrechen"
             is BleConnectionState.Reconnecting -> "Reconnect abbrechen"
             is BleConnectionState.Connected -> "Trennen"
-            else -> rememberedDeviceName?.let { "Mit $it verbinden" } ?: "Scannen / Verbinden"
+            else -> rememberedDeviceName?.let { "Mit $it verbinden" } ?: "Pulssensor verbinden"
         }
 }
 
@@ -226,7 +230,7 @@ class HeartRateViewModel(application: Application) : AndroidViewModel(applicatio
             return
         }
         if (bleManager.connectionState.value !is BleConnectionState.Connected) {
-            _message.value = "Erst mit dem Pulsgurt verbinden."
+            _message.value = "Erst mit dem Pulssensor verbinden."
             return
         }
         RecordingService.start(getApplication())

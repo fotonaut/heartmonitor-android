@@ -96,7 +96,7 @@ fun DeviceListScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = if (scanning) "Suche Geräte…"
-                        else "Keine Geräte gefunden.\nHR50 aktiv, angelegt und nicht mit " +
+                        else "Keine Geräte gefunden.\nPulssensor aktiv, angelegt und nicht mit " +
                             "einer anderen App/Uhr verbunden?",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
